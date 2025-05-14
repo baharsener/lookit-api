@@ -143,8 +143,6 @@ msgid ""
 "What racial group(s) does your family identify with/belong to? Please select "
 "any that apply to someone in your children's immediate family."
 msgstr ""
-"Aileniz hangi ırk grubuna ya da gruplarına mensup olduğunu düşünüyor? Lütfen çocuğunuzun yakın "
-"ailesinden birine uyan tüm seçenekleri işaretleyin."
 
 #: accounts/forms.py:356
 #, fuzzy
@@ -154,7 +152,7 @@ msgstr "Başka bir ırk, etnisite veya köken"
 
 #: accounts/forms.py:359
 msgid "Share more about your children's parents/guardians:"
-msgstr "Çocuğunuzun ebeveynleri/vasileri hakkında daha fazla bilgi paylaşın"
+msgstr ""
 
 #: accounts/forms.py:378
 msgid ""
@@ -230,9 +228,6 @@ msgid ""
 "on a particular group of children. The choices you make below are used to "
 "show you studies that are designed for children with these characteristics."
 msgstr ""
-"Çoğu çalışma genel bir yaş aralığına yönelik tasarlanmıştır, ancak bazıları "
-"belirli bir çocuk grubuna odaklanmaktadır. Aşağıda yapacağınız seçimler, bu "
-"özelliklere sahip çocuklar için tasarlanmış çalışmaları göstermek için kullanılacaktır."
 
 #: accounts/forms.py:456
 #, fuzzy
@@ -242,7 +237,7 @@ msgstr "Çalışmalar"
 
 #: accounts/forms.py:457
 msgid "Studies happening right now"
-msgstr "Şu anda gerçekleşen çalışmalar"
+msgstr ""
 
 #: accounts/forms.py:458
 #, fuzzy
@@ -256,7 +251,7 @@ msgstr ""
 
 #: accounts/forms.py:462
 msgid "babies (under 1)"
-msgstr "bebekler (1 yaş altı)"
+msgstr ""
 
 #: accounts/forms.py:463
 msgid "toddlers (1-2)"
@@ -264,15 +259,15 @@ msgstr ""
 
 #: accounts/forms.py:464
 msgid "preschoolers (3-4)"
-msgstr "okul öncesi çocuklar (3-4 yaş)"
+msgstr ""
 
 #: accounts/forms.py:465
 msgid "school-age kids (5-17)"
-msgstr "okul çağındaki çocuklar (5-17 yaş)"
+msgstr ""
 
 #: accounts/forms.py:466
 msgid "adults (18+)"
-msgstr "yetişkinler (18+)"
+msgstr ""
 
 #: accounts/forms.py:469
 msgid "Show studies happening..."
@@ -290,7 +285,7 @@ msgstr ""
 
 #: accounts/forms.py:476
 msgid "Hide Studies We've Done"
-msgstr "Katıldığımız Çalışmaları Gizle"
+msgstr ""
 
 #: accounts/forms.py:515
 #, fuzzy
@@ -768,7 +763,7 @@ msgstr "Katılımcı bilgisi ekle veya düzenle"
 
 #: accounts/templates/accounts/_account-navigation.html:21
 msgid "Continue to Study"
-msgstr "Çalışmaya Devam Et"
+msgstr ""
 
 #: accounts/templates/accounts/_account-navigation.html:23
 msgid "Go on to"
@@ -776,15 +771,15 @@ msgstr ""
 
 #: accounts/templates/accounts/_account-navigation.html:29
 msgid "Find Another Study"
-msgstr "Başka Bir Çalışma Bul"
+msgstr ""
 
 #: accounts/templates/accounts/_account-navigation.html:31
 msgid "Find a Study Now"
-msgstr "Şimdi Bir Çalışma Bul"
+msgstr ""
 
 #: accounts/templates/accounts/_account-navigation.html:35
 msgid "See all available studies."
-msgstr "Tüm mevcut çalışmaları gör"
+msgstr ""
 
 #: accounts/templates/accounts/_account-navigation.html:38
 #: web/templates/web/participant-email-preferences.html:6
@@ -1229,7 +1224,7 @@ msgstr "Şifrenizi mi unuttunuz?"
 
 #: web/templates/registration/login.html:28
 msgid "New to Children Helping Science?"
-msgstr "Children Helping Science'a yeni misiniz?"
+msgstr ""
 
 #: web/templates/registration/login.html:28
 msgid "Register your family!"
@@ -1475,23 +1470,23 @@ msgstr "Kayıt ol"
 
 #: web/templates/web/_studies-by-age-group.html:10
 msgid "studies for babies (under 1)"
-msgstr "bebekler için çalışmalar (1 yaş altı)"
+msgstr ""
 
 #: web/templates/web/_studies-by-age-group.html:17
 msgid "studies for toddlers (1-2)"
-msgstr "bebekler için çalışmalar (1-2 yaş)"
+msgstr ""
 
 #: web/templates/web/_studies-by-age-group.html:26
 msgid "studies for preschoolers (3-4)"
-msgstr "okul öncesi çocuklar için çalışmalar (3-4 yaş)"
+msgstr ""
 
 #: web/templates/web/_studies-by-age-group.html:33
 msgid "studies for school-aged kids & teens (5-17)"
-msgstr "okul çağındaki çocuklar ve gençler için çalışmalar (5-17 yaş)"
+msgstr ""
 
 #: web/templates/web/base.html:16 web/templates/web/home.html:35
 msgid "Children Helping Science"
-msgstr "Children Helping Science"
+msgstr ""
 
 #: web/templates/web/child-add.html:8 web/templates/web/children-list.html:6
 msgid "Children"
@@ -1536,7 +1531,7 @@ msgstr "Çocuk bilgisini güncelle"
 
 #: web/templates/web/children-list.html:19
 msgid "Click the 'Add Child' button to add a child to your account."
-msgstr "Hesabınıza bir çocuk eklemek için 'Çocuk Ekle' butonuna tıklayın"
+msgstr ""
 
 #: web/templates/web/children-list.html:22
 msgid ""
@@ -1544,25 +1539,18 @@ msgid ""
 "another by clicking the 'Add Child' button. Click the 'Find a Study' button "
 "to view the studies available for your children."
 msgstr ""
-"Hesabınızdaki çocukların bilgilerini düzenleyebilir veya 'Çocuk Ekle' butonuna "
-"tıklayarak başka bir çocuk ekleyebilirsiniz. 'Bir Çalışma Bul' butonuna "
-"tıklayarak çocuklarınız için mevcut çalışmaları görüntüleyebilirsiniz."
 
 #: web/templates/web/children-list.html:26
 msgid ""
 "When you are ready, click the 'Continue to Study' button to go on to your "
 "study, '{{ request.session.study_name }}'."
 msgstr ""
-"Hazır olduğunuzda, 'Çalışmaya Devam Et' butonuna tıklayarak "
-"‘{{ request.session.study_name }}’ çalışmanıza devam edebilirsiniz."
 
 #: web/templates/web/children-list.html:30
 msgid ""
 "You can edit information about the children listed in your account, or add "
 "another by clicking the 'Add Child' button."
 msgstr ""
-"Hesabınızdaki çocukların bilgilerini düzenleyebilir veya 'Çocuk Ekle' butonuna "
-"tıklayarak başka bir çocuk ekleyebilirsiniz."
 
 #: web/templates/web/children-list.html:33
 msgid ""
