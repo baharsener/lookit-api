@@ -1,5 +1,6 @@
 import inspect
 import json
+import logging
 import os
 import re
 import zipfile
@@ -15,7 +16,7 @@ from django.core.files import File
 from project import storages
 from studies.helpers import send_mail
 
-DOCKER_CLIENT = docker.from_env()
+logger = logging.getLogger(__name__)
 
 
 class DirectoryTargets(NamedTuple):
@@ -190,7 +191,8 @@ class EmberFrameplayerBuilder(ExperimentBuilder):
             self.build_context["update_fields"] += ["metadata"]
 
     def build_docker_image(self):
-        image, _image_log_gen = DOCKER_CLIENT.images.build(
+        docker_client = docker.from_env()
+        image, _image_log_gen = docker_client.images.build(
             path=settings.EMBER_BUILD_ROOT_PATH,
             pull=True,
             tag="ember_build",
@@ -219,7 +221,8 @@ class EmberFrameplayerBuilder(ExperimentBuilder):
         )
 
     def run_docker_container(self, container_paths, study_uuid, local_paths):
-        stdout_and_stderr = DOCKER_CLIENT.containers.run(
+        docker_client = docker.from_env()
+        stdout_and_stderr = docker_client.containers.run(
             "ember_build",
             command="bash build.sh",
             auto_remove=True,
@@ -333,7 +336,11 @@ def _upload_in_serial(local_path, storage):
                 full_path = os.path.join(root_directory, filename)
                 with open(full_path, mode="rb") as f:
                     remote_path = full_path.split("/ember_build/deployments/")[1]
-                    storage.save(remote_path, File(f))
+                    filename = storage.save(remote_path, File(f))
+    else:
+        logger.debug(
+            "*** WARNING ***: Debug is true, not uploading files to cloud storage."
+        )
 
 
 def download_repos(player_repo_url, player_sha=None):

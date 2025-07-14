@@ -1,11 +1,14 @@
 import json
+import re
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
 from botocore.exceptions import ClientError, ParamValidationError
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.core.validators import URLValidator
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 from django_dynamic_fixture import G, N
@@ -13,7 +16,12 @@ from guardian.shortcuts import assign_perm
 from more_itertools import quantify
 
 from accounts.models import Child, Message, User
-from studies.helpers import ResponseEligibility, send_mail
+from studies.helpers import (
+    ResponseEligibility,
+    get_absolute_url,
+    get_experiment_absolute_url,
+    send_mail,
+)
 from studies.models import Lab, Response, Study, StudyType, StudyTypeEnum, Video
 from studies.permissions import StudyPermission
 from studies.tasks import (
@@ -42,21 +50,21 @@ Why: We are interested in seeing how fast your child can hand-compute integrals.
 
 Compensation: You child will receive exactly $1 for each integral computed.
 
-You and your child can participate any time you want by going to "The Most Fake Study Ever" ({base_url}/studies/{study_uuid}/). If you have any questions, please reply to this email to reach the ECCL at faker@fakelab.com.
+You and your child can participate any time you want by going to "The Most Fake Study Ever" ({study_url}). If you have any questions, please reply to this email to reach the ECCL at faker@fakelab.com.
 
 Note: If you have taken part in Lookit studies before, you might notice that the page looks a little different than before. Our web address is changing from lookit.mit.edu to childrenhelpingscience.com as we merge together two programs for online studies that our team runs. There have been no changes to who runs the platform or who can see your child's data. Thanks for contributing to the science of how kids learn - we hope to see you soon!
 
 -- the Lookit/Children Helping Science team
 
 
-Update your CHS email preferences here: {base_url}/account/email/
-Unsubscribe from all CHS emails: {base_url}{unsubscribe}
+Update your CHS email preferences here: {email_preferences_url}
+Unsubscribe from all CHS emails: {unsubscribe_url}
 Questions or feedback for Children Helping Science?: childrenhelpingscience@gmail.com
 """
 
 
 class TestAnnouncementEmailFunctionality(TestCase):
-    maxDiff = 2000  # In case we need to check the email body contents
+    maxDiff = None  # In case we need to check the email body contents
 
     def setUp(self):
         five_months_ago = date.today() - timedelta(days=30 * 5)
@@ -435,11 +443,15 @@ class TestAnnouncementEmailFunctionality(TestCase):
         token = self.participant_two.generate_token()
         username = self.participant_two.username
         target_email_structure = TARGET_EMAIL_TEMPLATE.format(
-            base_url=settings.BASE_URL,
-            study_uuid=self.study_two.uuid,
-            unsubscribe=reverse(
-                "web:email-unsubscribe-link",
-                kwargs={"token": token, "username": username},
+            study_url=get_absolute_url(
+                reverse("web:study-detail", kwargs={"uuid": self.study_two.uuid})
+            ),
+            email_preferences_url=get_absolute_url(reverse("web:email-preferences")),
+            unsubscribe_url=get_absolute_url(
+                reverse(
+                    "web:email-unsubscribe-link",
+                    kwargs={"token": token, "username": username},
+                )
             ),
         )
 
@@ -478,6 +490,48 @@ class TestAnnouncementEmailFunctionality(TestCase):
             message_object.subject,
             'Larry, Moe, and Curly are invited to take part in "The Most Fake Study Ever" on Lookit (Children Helping Science)!',
         )
+
+    def test_email_contains_valid_urls(self):
+        validator = URLValidator()
+        # The validator should catch various malformed URLs
+        with self.assertRaises(ValidationError):
+            validator("http:/missing-initial-slash.com")
+        with self.assertRaises(ValidationError):
+            validator("not-a-url")
+        with self.assertRaises(ValidationError):
+            validator("https://includes[brackets].com")
+
+        # It should not raise errors for http/https and valid link structures
+        validator("https://a-vaild-link.com")
+        validator("http://a-valid-link.com")
+
+        message_object: Message = Message.send_announcement_email(
+            self.participant_two, self.study_two, [self.child_two, self.child_three]
+        )
+
+        # Extract all URLs from the message body. We need to assume that the http(s) is there since we're grabbing the URLs with regex, so this test will NOT catch errors with the http:/https: part of the URL.
+        body = message_object.body
+        url_regex = r"https?:[^\s)]+"
+        urls = re.findall(url_regex, body)
+
+        # Validate each URL in the announcement email body using URLValidator
+        for url in urls:
+            try:
+                validator(url)
+            except ValidationError:
+                self.fail(f"Invalid URL found in email body: {url}")
+
+    def test_urls_do_not_contain_double_slashes(self):
+        # Tests for a double slash error in URLs that was caused by adding a trailing slash to the BASE_URL in project settings
+        message_object: Message = Message.send_announcement_email(
+            self.participant_two, self.study_two, [self.child_two, self.child_three]
+        )
+        body = message_object.body
+        urls = re.findall(r"https?://[^\s)]+", body)
+        for url in urls:
+            url_without_scheme = re.sub(r"^https?://", "", url)
+            if "//" in url_without_scheme:
+                self.fail(f"URL contains double slashes: {url}")
 
     def test_study_excluded_from_targets_after_message(self):
         Message.send_announcement_email(
@@ -611,7 +665,6 @@ class TestSendMail(TestCase):
             "Test email",
             ["lookit-test-email@mit.edu"],
             bcc=[],
-            base_url="https://lookit-staging.mit.edu/",
             custom_message=mark_safe(
                 '<p>line 1<br></p><p><img style="width: 24px;" src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAASABIAAD/4QCURXhpZgAATU0AKgAAAAgABQESAAMAAAABAAEAAAEaAAUAAAABAAAASgEbAAUAAAABAAAAUgExAAIAAAAHAAAAWodpAAQAAAABAAAAYgAAAAAAAABIAAAAAQAAAEgAAAABUGljYXNhAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAGKADAAQAAAABAAAAEAAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgAEAAYAwERAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMACAYGCAoKCAgICAkICAkICQgICQkIDQgIBwkdGh8eHRocHCAkLicgIiwjHBwoNyksMDE0NDQfJzk9ODI8LjM0Mv/bAEMBCQkJDQoNFQ0NFTIhECEyMjIyMjIyMjInJzIyJiYnJycmMiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJv/dAAQAA//aAAwDAQACEQMRAD8AyvBEcEer2e6B5QNzK6hmUcHj09+avELTQ5sHZ6vf/gHsN/qejR3tjo7eU93qFs7QKjM2GwSpyOMHa35VnpojsVOTi59EeKeK7e5jv7+WFGeJpFR2iy56DOQPp+laU6kF7r3PPxeGqz96Pws//9Cj4RlJaWG0jjf/AEVRJdzv8iuc8HHIODWE60VNOb0+83hhn7K1Na+el2/8jQX+0ZLe3jh1Ww/tC0tLm2nkE7TeUN3yZOBtYAHjHrVzrUpJuK1/LyN6OFxFHldZe7p/296HC3muXf2nZ9nignKyM08nmzSGXJyQCcEcn25p+zjZSvc5p1pzm4yja2i9Ef/Z" data-filename="small.jpg"></p><p>line 2<br></p>'
             ),
@@ -702,6 +755,56 @@ class TestSendMail(TestCase):
             **context,
         )
         self.assertEqual(email.from_email, settings.EMAIL_FROM_ADDRESS)
+
+
+class TestEmailHeaders(TestCase):
+    def setUp(self):
+        self.context = {
+            "token": G(User).generate_token(),
+            "username": "username@email.com",
+        }
+
+    def test_email_headers_returns_expected_keys(self):
+        headers = Message.email_headers(self.context)
+        self.assertIsNotNone(headers)
+        self.assertIn("List-Unsubscribe", headers)
+        self.assertIn("List-Unsubscribe-Post", headers)
+        self.assertEqual(headers["List-Unsubscribe-Post"], "List-Unsubscribe=One-Click")
+
+    def test_list_unsubscribe_header_contains_valid_mailto_and_url(self):
+        headers = Message.email_headers(self.context)
+        header_value = headers["List-Unsubscribe"]
+        parts = [part.strip("<> ") for part in header_value.split(",")]
+        self.assertTrue(any(part.startswith("mailto:") for part in parts))
+        url_parts = [part for part in parts if part.startswith("http")]
+        self.assertEqual(len(url_parts), 1)
+
+        # Validate the unsubscribe URL
+        validator = URLValidator()
+        try:
+            validator(url_parts[0])
+        except ValidationError:
+            self.fail(f"Invalid unsubscribe URL in header: {url_parts[0]}")
+
+    def test_header_unsubscribe_url_does_not_contain_double_slashes(self):
+        # Tests for a double slash error in the URL that was caused by adding a trailing slash to the BASE_URL in project settings
+        headers = Message.email_headers(self.context)
+        url = re.search(r"https?://[^\s)]+", headers["List-Unsubscribe"]).group()
+        url_without_scheme = re.sub(r"^https?://", "", url)
+        if "//" in url_without_scheme:
+            self.fail(f"URL contains double slashes: {url}")
+
+    def test_email_headers_returns_none_if_token_missing(self):
+        context = {
+            "username": self.context["username"],
+        }
+        headers = Message.email_headers(context)
+        self.assertIsNone(headers)
+
+    def test_email_headers_returns_none_if_username_missing(self):
+        context = {"token": self.context["token"]}
+        headers = Message.email_headers(context)
+        self.assertIsNone(headers)
 
 
 class StudyTypeModelTestCase(TestCase):
@@ -1459,6 +1562,12 @@ class ResponseEligibilityTestCase(TestCase):
         )
 
 
+test_bucket_var_name = "FAKE_BUCKET_VAR"
+test_bucket_name = "fake-bucket-for-tests"
+test_bucket_var_name_2 = "FAKE_BUCKET_VAR_2"
+test_bucket_name_2 = "another-fake-bucket"
+
+
 class TestListIncompleteVideoUploads(TestCase):
     # Patch the S3_CLIENT directly (instead of boto3) because it has already been created globally in the module
     @patch("studies.tasks.S3_CLIENT")
@@ -1475,7 +1584,7 @@ class TestListIncompleteVideoUploads(TestCase):
             ]
         }
 
-        result = get_all_incomplete_video_files()
+        result = get_all_incomplete_video_files(test_bucket_name)
 
         # Assert that list_multipart_uploads mock was called
         mock_s3_client.list_multipart_uploads.assert_called_once()
@@ -1518,7 +1627,7 @@ class TestListIncompleteVideoUploads(TestCase):
             ]
         }
 
-        result = get_all_incomplete_video_files()
+        result = get_all_incomplete_video_files(test_bucket_name)
 
         mock_s3_client.list_multipart_uploads.assert_called_once()
         # Only uploads that were created more than 24 hrs ago are returned
@@ -1541,7 +1650,7 @@ class TestListIncompleteVideoUploads(TestCase):
 
         # Test that an error is raised
         with self.assertRaises(ValueError):
-            get_all_incomplete_video_files()
+            get_all_incomplete_video_files(test_bucket_name)
 
     @patch("studies.tasks.S3_CLIENT")
     def test_no_uploads_key_in_s3_response(self, mock_s3_client):
@@ -1549,7 +1658,7 @@ class TestListIncompleteVideoUploads(TestCase):
 
         mock_s3_client.list_multipart_uploads.return_value = {"SomeOtherKey": "Value"}
 
-        result = get_all_incomplete_video_files()
+        result = get_all_incomplete_video_files(test_bucket_name)
 
         mock_s3_client.list_multipart_uploads.assert_called_once()
         # get_all_incomplete_video_files should return an empty array
@@ -1561,7 +1670,7 @@ class TestListIncompleteVideoUploads(TestCase):
 
         mock_s3_client.list_multipart_uploads.return_value = {"Uploads": []}
 
-        result = get_all_incomplete_video_files()
+        result = get_all_incomplete_video_files(test_bucket_name)
 
         mock_s3_client.list_multipart_uploads.assert_called_once()
         # get_all_incomplete_video_files should return an empty array
@@ -1575,7 +1684,7 @@ class TestListIncompleteVideoUploads(TestCase):
 
         # Test that an error is raised
         with self.assertRaises(TypeError):
-            get_all_incomplete_video_files()
+            get_all_incomplete_video_files(test_bucket_name)
 
     @patch("studies.tasks.S3_CLIENT")
     def test_incomplete_video_uploads_is_not_iterable(self, mock_s3_client):
@@ -1585,7 +1694,7 @@ class TestListIncompleteVideoUploads(TestCase):
 
         # Test that an error is raised
         with self.assertRaises(TypeError):
-            get_all_incomplete_video_files()
+            get_all_incomplete_video_files(test_bucket_name)
 
     @patch("studies.tasks.S3_CLIENT")
     def test_incomplete_video_uploads_missing_date_initiated(self, mock_s3_client):
@@ -1600,7 +1709,7 @@ class TestListIncompleteVideoUploads(TestCase):
             ]
         }
 
-        result = get_all_incomplete_video_files()
+        result = get_all_incomplete_video_files(test_bucket_name)
 
         mock_s3_client.list_multipart_uploads.assert_called_once()
         # get_all_incomplete_video_files should return all of the Upload objects with a valid "Initiated" datetime
@@ -1626,7 +1735,7 @@ class TestListIncompleteVideoUploads(TestCase):
 
         # Test that the ClientError is raised
         with self.assertRaises(ClientError):
-            get_all_incomplete_video_files()
+            get_all_incomplete_video_files(test_bucket_name)
 
     @patch("studies.tasks.S3_CLIENT")
     def test_s3_response_is_validation_error(self, mock_s3_client):
@@ -1640,7 +1749,7 @@ class TestListIncompleteVideoUploads(TestCase):
 
         # Test that the ValueError is raised (ParamValidationError is caught and re-raised as ValueError)
         with self.assertRaises(ValueError):
-            get_all_incomplete_video_files()
+            get_all_incomplete_video_files(test_bucket_name)
 
 
 class TestListFilePartsFromIncompleteUpload(TestCase):
@@ -1657,7 +1766,7 @@ class TestListFilePartsFromIncompleteUpload(TestCase):
             ]
         }
 
-        result = get_file_parts("example_video.webm", "upload-id-123")
+        result = get_file_parts(test_bucket_name, "example_video.webm", "upload-id-123")
 
         # Assert that list_parts mock was called
         mock_s3_client.list_parts.assert_called_once()
@@ -1674,14 +1783,14 @@ class TestListFilePartsFromIncompleteUpload(TestCase):
         mock_s3_client.list_parts.return_value = None
 
         with self.assertRaises(ValueError):
-            get_file_parts("example_video.webm", "upload-id-123")
+            get_file_parts(test_bucket_name, "example_video.webm", "upload-id-123")
 
     @patch("studies.tasks.S3_CLIENT")
     def test_no_parts_key_in_s3_response(self, mock_s3_client):
         # get_file_parts should return an empty array if the S3 response exists but doesn't contain a "Parts" key
         mock_s3_client.list_parts.return_value = {"SomeOtherKey": "Value"}
 
-        result = get_file_parts("example_video.webm", "upload-id-123")
+        result = get_file_parts(test_bucket_name, "example_video.webm", "upload-id-123")
 
         mock_s3_client.list_parts.assert_called_once()
         # get_file_parts should return an empty list
@@ -1693,7 +1802,7 @@ class TestListFilePartsFromIncompleteUpload(TestCase):
         # get_file_parts should return an empty array if the S3 response exists and contains a "Parts" key, but the list is empty.
         mock_s3_client.list_parts.return_value = {"Parts": []}
 
-        result = get_file_parts("example_video.webm", "upload-id-123")
+        result = get_file_parts(test_bucket_name, "example_video.webm", "upload-id-123")
 
         mock_s3_client.list_parts.assert_called_once()
         # get_file_parts should return an empty list
@@ -1710,7 +1819,7 @@ class TestListFilePartsFromIncompleteUpload(TestCase):
         mock_s3_client.list_parts.return_value = {"Parts": [{"ETag": "etag1"}]}
 
         with self.assertRaises(KeyError):
-            get_file_parts("example_video.webm", "upload-id-123")
+            get_file_parts(test_bucket_name, "example_video.webm", "upload-id-123")
 
     @patch("studies.tasks.S3_CLIENT")
     def test_get_file_parts_with_missing_etag(self, mock_s3_client):
@@ -1718,7 +1827,7 @@ class TestListFilePartsFromIncompleteUpload(TestCase):
         mock_s3_client.list_parts.return_value = {"Parts": [{"PartNumber": 1}]}
 
         with self.assertRaises(KeyError):
-            get_file_parts("example_video.webm", "upload-id-123")
+            get_file_parts(test_bucket_name, "example_video.webm", "upload-id-123")
 
     @patch("studies.tasks.S3_CLIENT")
     def test_get_file_parts_client_error(self, mock_s3_client):
@@ -1732,7 +1841,7 @@ class TestListFilePartsFromIncompleteUpload(TestCase):
         mock_s3_client.list_parts.side_effect = ClientError(error_response, "ListParts")
         # get_file_parts should raise a ClientError
         with self.assertRaises(ClientError):
-            get_file_parts("example_video.webm", "upload-id-123")
+            get_file_parts(test_bucket_name, "example_video.webm", "upload-id-123")
 
     @patch("studies.tasks.S3_CLIENT")
     def test_get_file_parts_param_validation_error(self, mock_s3_client):
@@ -1744,7 +1853,7 @@ class TestListFilePartsFromIncompleteUpload(TestCase):
 
         # get_file_parts should raise a ValueError (since ParamValidationError is caught and re-raised as ValueError)
         with self.assertRaises(ValueError):
-            get_file_parts("example_video.webm", "upload-id-123")
+            get_file_parts(test_bucket_name, "example_video.webm", "upload-id-123")
 
 
 class TestCompleteMultipartUpload(TestCase):
@@ -1759,6 +1868,7 @@ class TestCompleteMultipartUpload(TestCase):
         }
 
         complete_multipart_upload(
+            test_bucket_name,
             "example_video.webm",
             "upload-id-123",
             [{"PartNumber": 1, "ETag": "etag1"}, {"PartNumber": 2, "ETag": "etag2"}],
@@ -1774,6 +1884,7 @@ class TestCompleteMultipartUpload(TestCase):
         mock_s3_client.complete_multipart_upload.return_value = None
 
         complete_multipart_upload(
+            test_bucket_name,
             "example_video.webm",
             "upload-id-123",
             [{"PartNumber": 1, "ETag": "etag1"}, {"PartNumber": 2, "ETag": "etag2"}],
@@ -1793,6 +1904,7 @@ class TestCompleteMultipartUpload(TestCase):
         mock_s3_client.complete_multipart_upload.return_value = {"ResponseMetadata": {}}
 
         complete_multipart_upload(
+            test_bucket_name,
             "example_video.webm",
             "upload-id-123",
             [{"PartNumber": 1, "ETag": "etag1"}, {"PartNumber": 2, "ETag": "etag2"}],
@@ -1812,6 +1924,7 @@ class TestCompleteMultipartUpload(TestCase):
         mock_s3_client.complete_multipart_upload.return_value = {}
 
         complete_multipart_upload(
+            test_bucket_name,
             "example_video.webm",
             "upload-id-123",
             [{"PartNumber": 1, "ETag": "etag1"}, {"PartNumber": 2, "ETag": "etag2"}],
@@ -1838,6 +1951,7 @@ class TestCompleteMultipartUpload(TestCase):
         # complete_multipart_upload should raise this ClientError
         with self.assertRaises(ClientError):
             complete_multipart_upload(
+                test_bucket_name,
                 "example_video.webm",
                 "upload-id-123",
                 [{"PartNumber": 1, "ETag": "etag1"}],
@@ -1860,7 +1974,10 @@ class TestCompleteMultipartUpload(TestCase):
         )
 
         complete_multipart_upload(
-            "example_video.webm", "upload-id-123", [{"PartNumber": 1, "ETag": "etag1"}]
+            test_bucket_name,
+            "example_video.webm",
+            "upload-id-123",
+            [{"PartNumber": 1, "ETag": "etag1"}],
         )
 
         # complete_multipart_upload should log this error but not raise it
@@ -1870,6 +1987,12 @@ class TestCompleteMultipartUpload(TestCase):
 
 
 class TestCleanupIncompleteVideoUploadsTask(TestCase):
+    def setUp(self):
+        # The cleanup_incomplete_video_uploads task takes a list of buckets, which are variables from settings that hold bucket names. The bucket names must be defined in the project settings, otherwise they will be skipped, so we need to override the settings here.
+        # Can't use a dynamic setting name with the override_settings decorator, so manually start an override_settings here instead.
+        self.override = override_settings(**{test_bucket_var_name: test_bucket_name})
+        self.override.enable()
+
     @patch("studies.tasks.complete_multipart_upload")
     @patch("studies.tasks.get_file_parts")
     @patch("studies.tasks.get_all_incomplete_video_files")
@@ -1894,25 +2017,33 @@ class TestCleanupIncompleteVideoUploadsTask(TestCase):
             "ResponseMetadata": {"HTTPStatusCode": 200}
         }
 
-        cleanup_incomplete_video_uploads()
+        cleanup_incomplete_video_uploads(bucket_names=[test_bucket_var_name])
 
         # Check that all mocked functions were called
         mock_get_all_incomplete_video_files.assert_called_once()
-        mock_get_file_parts.assert_any_call("example_video.webm", "upload-id-123")
-        mock_get_file_parts.assert_any_call("another_video.webm", "upload-id-456")
+        mock_get_file_parts.assert_any_call(
+            test_bucket_name, "example_video.webm", "upload-id-123"
+        )
+        mock_get_file_parts.assert_any_call(
+            test_bucket_name, "another_video.webm", "upload-id-456"
+        )
         mock_complete_multipart_upload.assert_any_call(
+            test_bucket_name,
             "example_video.webm",
             "upload-id-123",
             [{"PartNumber": 1, "ETag": "etag1"}, {"PartNumber": 2, "ETag": "etag2"}],
         )
         mock_complete_multipart_upload.assert_any_call(
+            test_bucket_name,
             "another_video.webm",
             "upload-id-456",
             [{"PartNumber": 1, "ETag": "etag1"}, {"PartNumber": 2, "ETag": "etag2"}],
         )
 
         # Logger should show the initial log message, and the "handling incomplete file" message for each file in the list.
-        mock_logger.debug.assert_any_call("Cleaning up incomplete video uploads...")
+        mock_logger.debug.assert_any_call(
+            f"Cleaning up incomplete video uploads in bucket: {test_bucket_name}"
+        )
         mock_logger.debug.assert_any_call(
             "Handling incomplete file: example_video.webm"
         )
@@ -1938,18 +2069,24 @@ class TestCleanupIncompleteVideoUploadsTask(TestCase):
         ]
         mock_get_file_parts.return_value = []
 
-        cleanup_incomplete_video_uploads()
+        cleanup_incomplete_video_uploads(bucket_names=[test_bucket_var_name])
 
         # The mock function for getting incomplete files and their parts should have been called
         mock_get_all_incomplete_video_files.assert_called_once()
-        mock_get_file_parts.assert_any_call("example_video.webm", "upload-id-123")
-        mock_get_file_parts.assert_any_call("another_video.webm", "upload-id-456")
+        mock_get_file_parts.assert_any_call(
+            test_bucket_name, "example_video.webm", "upload-id-123"
+        )
+        mock_get_file_parts.assert_any_call(
+            test_bucket_name, "another_video.webm", "upload-id-456"
+        )
 
         # The complete multipart upload function should not have been called since there were no uploads with associated parts
         mock_complete_multipart_upload.assert_not_called()
 
         # Logger should show the initial log message, and the "handling incomplete file" message for each file in the list.
-        mock_logger.debug.assert_any_call("Cleaning up incomplete video uploads...")
+        mock_logger.debug.assert_any_call(
+            f"Cleaning up incomplete video uploads in bucket: {test_bucket_name}"
+        )
         mock_logger.debug.assert_any_call(
             "Handling incomplete file: example_video.webm"
         )
@@ -1971,7 +2108,7 @@ class TestCleanupIncompleteVideoUploadsTask(TestCase):
         # If there are no incomplete uploads, this task should just log the initial message. It should not attempt to get any file parts or complete any files.
         mock_get_all_incomplete_video_files.return_value = []
 
-        cleanup_incomplete_video_uploads()
+        cleanup_incomplete_video_uploads(bucket_names=[test_bucket_var_name])
 
         # The mock function for getting incomplete files should have been called
         mock_get_all_incomplete_video_files.assert_called_once()
@@ -1981,4 +2118,103 @@ class TestCleanupIncompleteVideoUploadsTask(TestCase):
         mock_complete_multipart_upload.assert_not_called()
 
         # If there are no files, the cleanup incomplete videos task just produces the initial log message
-        mock_logger.debug.assert_any_call("Cleaning up incomplete video uploads...")
+        debug_string = (
+            f"Cleaning up incomplete video uploads in bucket: {test_bucket_name}"
+        )
+        mock_logger.debug.assert_any_call(debug_string)
+
+    def tearDown(self):
+        # Clean up the setitngs override
+        self.override.disable()
+
+
+class TestVideoCleanupTaskWithMultipleBuckets(TestCase):
+    def setUp(self):
+        # The cleanup_incomplete_video_uploads task takes a list of buckets, which are variables from settings that hold bucket names. The bucket names must be defined in the project settings, otherwise they will be skipped, so we need to override the settings here.
+        # Can't use a dynamic setting name with the override_settings decorator, so manually start an override_settings here instead.
+        # Define two bucket variables to pass in to the task and loop over.
+        self.override = override_settings(
+            **{
+                test_bucket_var_name: test_bucket_name,
+                test_bucket_var_name_2: test_bucket_name_2,
+            }
+        )
+        self.override.enable()
+
+    @patch("studies.tasks.get_all_incomplete_video_files")
+    @patch("studies.tasks.logger")
+    def test_cleanup_videos_task_runs_on_multiple_buckets(
+        self, mock_logger, mock_get_all_incomplete_video_files
+    ):
+        mock_get_all_incomplete_video_files.return_value = []
+
+        cleanup_incomplete_video_uploads(
+            bucket_names=[test_bucket_var_name, test_bucket_var_name_2]
+        )
+
+        # Check that the main function was called with both buckets
+        mock_get_all_incomplete_video_files.assert_any_call(test_bucket_name)
+        mock_get_all_incomplete_video_files.assert_any_call(test_bucket_name_2)
+        mock_logger.debug.assert_any_call(
+            f"Cleaning up incomplete video uploads in bucket: {test_bucket_name}"
+        )
+        mock_logger.debug.assert_any_call(
+            f"Cleaning up incomplete video uploads in bucket: {test_bucket_name_2}"
+        )
+
+    @patch("studies.tasks.get_all_incomplete_video_files")
+    @patch("studies.tasks.logger")
+    def test_cleanup_videos_task_skips_invalid_bucket(
+        self, mock_logger, mock_get_all_incomplete_video_files
+    ):
+        mock_get_all_incomplete_video_files.return_value = []
+
+        invalid_bucket_var = "MISSING_BUCKET_VAR"
+
+        # Call task with one valid and one invalid (missing) bucket variable from settings
+        cleanup_incomplete_video_uploads(
+            bucket_names=[invalid_bucket_var, test_bucket_var_name]
+        )
+
+        # Valid bucket was used
+        mock_get_all_incomplete_video_files.assert_called_once_with(test_bucket_name)
+        mock_logger.debug.assert_any_call(
+            f"Cleaning up incomplete video uploads in bucket: {test_bucket_name}"
+        )
+
+        # Error was logged for invalid bucket
+        mock_logger.error.assert_any_call(
+            f"Invalid S3 bucket setting: {invalid_bucket_var}"
+        )
+
+    def tearDown(self):
+        # Clean up the setitngs override
+        self.override.disable()
+
+
+fake_website = "https://fakedomain.asdf/"
+exp_fake_website = "https://experimentfakedomain.asdf/"
+
+
+@override_settings(BASE_URL=fake_website)
+@override_settings(EXPERIMENT_BASE_URL=exp_fake_website)
+class TestGetAbsoluteURLTestCase(TestCase):
+    def test_get_absolute_url(self):
+        self.assertTrue(get_absolute_url("/somepath/"), f"{fake_website}somepath/")
+        self.assertTrue(get_absolute_url("somepath/"), f"{fake_website}somepath/")
+        self.assertTrue(get_absolute_url("/somepath"), f"{fake_website}somepath")
+        self.assertTrue(get_absolute_url("somepath"), f"{fake_website}somepath")
+
+    def test_get_experiment_absolute_url(self):
+        self.assertTrue(
+            get_experiment_absolute_url("/somepath/"), f"{exp_fake_website}somepath/"
+        )
+        self.assertTrue(
+            get_experiment_absolute_url("somepath/"), f"{exp_fake_website}somepath/"
+        )
+        self.assertTrue(
+            get_experiment_absolute_url("/somepath"), f"{exp_fake_website}somepath"
+        )
+        self.assertTrue(
+            get_experiment_absolute_url("somepath"), f"{exp_fake_website}somepath"
+        )
